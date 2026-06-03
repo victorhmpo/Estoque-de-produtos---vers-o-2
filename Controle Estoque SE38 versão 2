@@ -1,0 +1,650 @@
+REPORT Z34PRODUTOS_EST2.
+
+" Declaração das tabelas globais
+TABLES: z34produtos_est, z34recursos_fin.
+
+" Declaração de variáveis globais
+DATA: gv_saldo   TYPE z34recursos_fin-saldo, "Saldo disponível
+      gv_ucomm   TYPE sy-ucomm,
+      lv_custo   TYPE p LENGTH 15 DECIMALS 2, "Custo total da compra "Usado na nos botões e no form
+      lv_receita TYPE p LENGTH 15 DECIMALS 2. "Lucro total da venda  "Usado na nos botões e no form
+
+" Definição da estrutura para os campos de consulta desejados
+" Estruturas customizadas
+TYPES: BEGIN OF ty_produto,
+         nome       TYPE z34produtos_est-nome,
+         quantidade TYPE z34produtos_est-quantidade,
+         preco      TYPE z34produtos_est-preco,
+         custo      TYPE z34produtos_est-custo,
+       END OF ty_produto.
+
+" Declaração estruturada para os campos de consulta desejados
+" ALV
+DATA: go_container TYPE REF TO cl_gui_custom_container,
+      go_alv       TYPE REF TO cl_gui_alv_grid,
+      gt_produtos  TYPE TABLE OF ty_produto. "Estrutura customizada
+
+SELECTION-SCREEN BEGIN OF LINE.
+  SELECTION-SCREEN PUSHBUTTON  21(20) bt_cad  USER-COMMAND cad.  " Cadastrar
+  SELECTION-SCREEN PUSHBUTTON  43(20) bt_ver  USER-COMMAND ver.  " Ver o estoque
+SELECTION-SCREEN END OF LINE.
+
+SELECTION-SCREEN BEGIN OF LINE.
+  SELECTION-SCREEN PUSHBUTTON 21(20) bt_comp USER-COMMAND comp. " Comprar
+  SELECTION-SCREEN PUSHBUTTON 43(20) bt_vend USER-COMMAND vend. " Vender
+SELECTION-SCREEN END OF LINE.
+
+SELECTION-SCREEN BEGIN OF LINE.
+  SELECTION-SCREEN PUSHBUTTON 21(20) bt_inv  USER-COMMAND inv.  " Investir
+  SELECTION-SCREEN PUSHBUTTON 43(20) bt_sac  USER-COMMAND sac.  " Sacar
+SELECTION-SCREEN END OF LINE.
+
+SELECTION-SCREEN BEGIN OF LINE.
+  SELECTION-SCREEN PUSHBUTTON 21(20) bt_at_c USER-COMMAND at_c. " Atualizar custo
+  SELECTION-SCREEN PUSHBUTTON 43(20) bt_at_p USER-COMMAND at_p. " Atualizar preço
+SELECTION-SCREEN END OF LINE.
+
+" Campos para interação
+SELECTION-SCREEN BEGIN OF BLOCK b1 WITH FRAME TITLE TEXT-001.
+  PARAMETERS: v_saldo TYPE z34recursos_fin-saldo MODIF ID sal.
+  "lbl_sald = |Saldo disponível: { v_saldo }|.
+  "SELECTION-SCREEN COMMENT /1(20) lbl_sald." Comentário dinâmico
+  SELECTION-SCREEN SKIP.
+  PARAMETERS: p_prod TYPE z34produtos_est-nome,       " Nome do produto
+              p_qtd  TYPE z34produtos_est-quantidade, " Quantidade
+              p_cus  TYPE z34produtos_est-custo,      " Custo do produto
+              p_prec TYPE z34produtos_est-preco.      " Preço do produto
+  SELECTION-SCREEN SKIP.
+  PARAMETERS: p_inve  TYPE p LENGTH 15 DECIMALS 2,   " Valor para investimento
+              p_sac   TYPE p LENGTH 15 DECIMALS 2.   " Valor para saque
+SELECTION-SCREEN END OF BLOCK b1.
+
+" Inicialização da tela
+INITIALIZATION.
+  bt_cad  = 'Cadastrar Produto'.
+  bt_comp = 'Comprar Produto'.
+  bt_vend = 'Vender Produto'.
+  bt_inv  = 'Receber investimento'.
+  bt_ver  = 'Ver o estoque'.
+  bt_sac  = 'Sacar o lucro'.
+  bt_at_c = 'Atualizar o custo'.
+  bt_at_p = 'Atualizar o preço'.
+
+  PERFORM atualizar_saldo_na_tela. "Carrega saldo inicial
+  "PERFORM mostrar_produtos. "Mostra o estoque de produtos ao usuário
+
+"Captura qual botão foi pressionado
+AT SELECTION-SCREEN.
+  gv_ucomm = sy-ucomm.
+
+  CASE gv_ucomm.
+    WHEN 'CAD'.
+        PERFORM cadastrar_produto.
+    WHEN 'COMP'.
+      PERFORM comprar_produto.
+    WHEN 'VEND'.
+        PERFORM vender_produto.
+    WHEN 'INV'.
+      PERFORM receber_investimento.
+    WHEN 'VER'.
+      PERFORM ver_estoque_popup.
+    WHEN 'SAC'.
+        PERFORM sacar_lucro.
+    WHEN 'AT_C'.
+      PERFORM atualizar_custo.
+    WHEN 'AT_P'.
+      PERFORM atualizar_preco.
+    WHEN 'FEC'.
+      LEAVE TO SCREEN 0. " Fecha a popup e volta para a tela principal
+
+  ENDCASE.
+
+  " FORMS:
+
+FORM cadastrar_produto.
+  "-----------------------------------------------------
+  " 0. Verificar preenchimento de campos obrigatórios
+  "-----------------------------------------------------
+  IF p_prod IS INITIAL OR p_qtd IS INITIAL OR p_cus IS INITIAL OR p_prec IS INITIAL.
+    MESSAGE 'Informe nome, quantidade, custo e preço do produto para cadastrar' TYPE 'E'.
+  ENDIF.
+  "-----------------------------------------------------
+  " 1. Regra de negócio: não permitir venda com prejuízo
+  "-----------------------------------------------------
+  IF p_cus >= p_prec.
+    MESSAGE 'O preço deve ser maior que o custo do produto.' TYPE 'E'.
+  ENDIF.
+
+  "-----------------------------------------------------
+  " 2. Gerar ID automático
+  "-----------------------------------------------------
+  " Forma antiga e com possível bug no caso de uso simultâneo de 2 ou mais usuários:
+*  DATA lv_id TYPE i.
+*  SELECT MAX( id_produto ) INTO @lv_id FROM z34produtos_est.
+*    lv_id = lv_id + 1.
+
+  " Forma melhorada padrão SAP: (Fonte: Copilot + https://youtu.be/SmreMbaPAX4?si=9zLqsh7yVYiGr0Js )
+  DATA lv_id TYPE z34produtos_est-id_produto.
+  CALL FUNCTION 'NUMBER_GET_NEXT'
+    EXPORTING
+      nr_range_nr = '01'
+      object = 'Z34PROD_ID' "Nome do objeto de intervalo que criei na SNRO
+    IMPORTING
+      number = lv_id.
+  "-----------------------------------------------------
+  " 3. Cadastar os dados
+  "-----------------------------------------------------
+    " Inserir produto
+    z34produtos_est-id_produto = lv_id.
+    z34produtos_est-nome       = p_prod.
+    z34produtos_est-quantidade = p_qtd.
+    z34produtos_est-custo      = p_cus.
+    z34produtos_est-preco      = p_prec.
+
+  "-----------------------------------------------------
+  " 4. Gravar no banco
+  "-----------------------------------------------------
+    INSERT z34produtos_est.
+    LEAVE TO LIST-PROCESSING.
+  "-----------------------------------------------------
+  " 5. Verificar se deu certo a gravação no banco
+  "-----------------------------------------------------
+    IF sy-subrc <> 0.
+      ROLLBACK WORK. " Cancela todas as instruções OpenSQL que modificam dados
+      MESSAGE 'Erro ao cadastrar o produto.' TYPE 'E'.
+    ENDIF.
+  "-----------------------------------------------------
+  " 6. Feedback ao usuário
+  "-----------------------------------------------------
+    COMMIT WORK. " Confirma todas as alterações na base de dados
+    CLEAR: p_prod, p_qtd, p_cus, p_prec, p_inve, p_sac.
+    MESSAGE 'O produto foi cadastrado com sucesso!' TYPE 'S'.
+
+ENDFORM.
+
+FORM obter_saldo.
+  "-----------------------------------------------------
+  " 1. Buscar o saldo atual no banco
+  "-----------------------------------------------------
+  SELECT SINGLE saldo
+    INTO gv_saldo
+    FROM z34recursos_fin
+    WHERE id_fin = 1.
+
+  "-----------------------------------------------------
+  " 2. Verificar se encontrou o registro
+  "-----------------------------------------------------
+  IF sy-subrc <> 0.
+    MESSAGE 'Erro ao obter o saldo financeiro' TYPE 'E'.
+  ENDIF.
+
+ENDFORM.
+
+FORM comprar_produto.
+
+  "-----------------------------------------------------
+  " 0. Verificar preenchimento de campos obrigatórios
+  "-----------------------------------------------------
+  IF p_prod IS INITIAL.
+    MESSAGE 'Informe o nome do produto' TYPE 'E'.
+  ENDIF.
+  IF p_qtd IS INITIAL.
+    MESSAGE 'Informe quantidade de produtos que deseja comprar' TYPE 'E'.
+  ENDIF.
+
+  "-----------------------------------------------------
+  " 1. Declaração de variáveis locais
+  "-----------------------------------------------------
+  DATA: ls_produto TYPE z34produtos_est,
+        lv_custo   TYPE p LENGTH 15 DECIMALS 2.
+
+  "-----------------------------------------------------
+  " 2. Buscar o produto no banco
+  "-----------------------------------------------------
+  SELECT  SINGLE *
+    INTO ls_produto
+    FROM z34produtos_est
+    WHERE nome = p_prod.
+
+  IF sy-subrc <> 0.
+    MESSAGE 'Esse produto não foi cadastrado' TYPE 'E'.
+  ENDIF.
+
+  "-----------------------------------------------------
+  " 3. Calcular o custo total
+  "-----------------------------------------------------
+  lv_custo = p_qtd * ls_produto-custo.
+
+  "-----------------------------------------------------
+  " 4. Verificar se o saldo é suficiente para a compra
+  "-----------------------------------------------------
+  PERFORM obter_saldo.
+
+  IF lv_custo > gv_saldo.
+    MESSAGE 'Saldo insuficiente' TYPE 'E'.
+  ENDIF.
+
+  "-----------------------------------------------------
+  " 5. Atualizar os dados
+  "-----------------------------------------------------
+  ls_produto-quantidade = ls_produto-quantidade + p_qtd.
+  gv_saldo = gv_saldo - lv_custo.
+
+  "-----------------------------------------------------
+  " 6. Atualizar o banco de dados
+  "-----------------------------------------------------
+  UPDATE z34produtos_est
+  SET quantidade = @ls_produto-quantidade
+  WHERE id_produto = @ls_produto-id_produto.
+
+  IF sy-subrc <> 0.
+    ROLLBACK WORK. " Cancela todas as instruções OpenSQL que modificam dados
+    MESSAGE 'Erro ao atualizar o estoque.' TYPE 'E'.
+  ENDIF.
+
+  UPDATE z34recursos_fin
+  SET saldo = @gv_saldo
+  WHERE id_fin = 1.
+
+  IF sy-subrc <> 0.
+    ROLLBACK WORK. " Cancela todas as instruções OpenSQL que modificam dados
+    MESSAGE 'Erro ao atualizar o saldo.' TYPE 'E'.
+  ENDIF.
+
+  "-----------------------------------------------------
+  " 7. Feedback ao usuário
+  "-----------------------------------------------------
+  COMMIT WORK. " Confirma todas as alterações na base de dados
+  PERFORM atualizar_saldo_na_tela.
+  CLEAR: p_prod, p_qtd, p_cus, p_prec, p_inve, p_sac.
+  MESSAGE 'Venda realizada com sucesso!' TYPE 'S'.
+
+ENDFORM.
+
+FORM vender_produto.
+  "-----------------------------------------------------
+  " 0. Verificar preenchimento de campos obrigatórios
+  "-----------------------------------------------------
+  IF p_prod IS INITIAL.
+    MESSAGE 'Informe o nome do produto' TYPE 'E'.
+  ENDIF.
+  IF p_qtd IS INITIAL.
+    MESSAGE 'Informe quantidade de produtos que deseja vender' TYPE 'E'.
+  ENDIF.
+  "-----------------------------------------------------
+  " 1. Declaração de variáveis locais
+  "-----------------------------------------------------
+  DATA: ls_produto TYPE z34produtos_est,
+        lv_lucro   TYPE p LENGTH 15 DECIMALS 2.
+
+  "-----------------------------------------------------
+  " 2. Buscar o produto no banco
+  "-----------------------------------------------------
+  SELECT SINGLE *
+    INTO ls_produto
+    FROM z34produtos_est
+    WHERE nome = p_prod.
+
+  IF sy-subrc <> 0.
+    MESSAGE 'Esse produto não foi cadastrado' TYPE 'E'.
+  ENDIF.
+
+  "-----------------------------------------------------
+  " 3. Verificar se há estoque suficiente
+  "-----------------------------------------------------
+  IF ls_produto-quantidade < p_qtd.
+    MESSAGE 'Estoque insuficiente' TYPE 'E'.
+  ENDIF.
+
+  "-----------------------------------------------------
+  " 4. Calcular o lucro bruto
+  "-----------------------------------------------------
+  lv_lucro = p_qtd * ls_produto-preco.
+
+  "-----------------------------------------------------
+  " 5. Obter o saldo atual
+  "-----------------------------------------------------
+  PERFORM obter_saldo.
+
+  "-----------------------------------------------------
+  " 6. Atualizar os dados
+  "-----------------------------------------------------
+  ls_produto-quantidade = ls_produto-quantidade - p_qtd.
+  gv_saldo = gv_saldo + lv_lucro.
+
+  "-----------------------------------------------------
+  " 6. Atualizar o banco de dados
+  "-----------------------------------------------------
+  UPDATE z34produtos_est
+  SET quantidade = @ls_produto-quantidade
+  WHERE id_produto = @ls_produto-id_produto.
+
+  IF sy-subrc <> 0.
+    ROLLBACK WORK. " Cancela todas as instruções OpenSQL que modificam dados
+    MESSAGE 'Erro ao atualizar o estoque.' TYPE 'E'.
+  ENDIF.
+
+  UPDATE z34recursos_fin
+  SET saldo = @gv_saldo
+  WHERE id_fin = 1.
+
+  IF sy-subrc <> 0.
+    ROLLBACK WORK. " Cancela todas as instruções OpenSQL que modificam dados
+    MESSAGE 'Erro ao atualizar o saldo.' TYPE 'E'.
+  ENDIF.
+
+  "-----------------------------------------------------
+  " 7. Feedback ao usuário
+  "-----------------------------------------------------
+  COMMIT WORK. " Confirma todas as alterações na base de dados
+  PERFORM atualizar_saldo_na_tela.
+  CLEAR:p_prod, p_qtd, p_cus, p_prec, p_inve, p_sac.
+  MESSAGE 'Venda realizada com sucesso!' TYPE 'S'.
+
+ENDFORM.
+
+FORM receber_investimento.
+  "1. Somar p_valor ao saldo atual
+  "2. Confirmar o recebimento do investimento com uma mensagem
+
+  "-----------------------------------------------------
+  " 0. Verificar preenchimento de campos obrigatórios
+  "-----------------------------------------------------
+  IF p_inve IS INITIAL.
+    MESSAGE 'Informe o valor do investimento antes de continuar.' TYPE 'E'.
+  ENDIF.
+
+  "-----------------------------------------------------
+  " 1. Declaração de variáveis locais
+  "-----------------------------------------------------
+  DATA lv_saldo_atual TYPE z34recursos_fin-saldo.
+
+  "-----------------------------------------------------
+  " 2. Ler o saldo atual do banco
+  "-----------------------------------------------------
+  SELECT SINGLE saldo INTO gv_saldo FROM z34recursos_fin WHERE id_fin = 1.
+
+  "-----------------------------------------------------
+  " 2. Somar o investimento ao saldo atual
+  "-----------------------------------------------------
+  gv_saldo = gv_saldo + p_inve.
+
+  "-----------------------------------------------------
+  " 3. Somar o investimento ao saldo atual
+  "-----------------------------------------------------
+  UPDATE z34recursos_fin SET saldo = gv_saldo WHERE id_fin = 1.
+
+  "-----------------------------------------------------
+  " 4. Verificar se a gravação deu certo no banco
+  "-----------------------------------------------------
+  IF sy-subrc <> 0.
+    ROLLBACK WORK. " Cancela todas as instruções OpenSQL que modificam dados
+    MESSAGE 'Erro no recebimento do investimento.' TYPE 'E'.
+  ENDIF.
+
+  "-----------------------------------------------------
+  " 5. Feedback ao usuário
+  "-----------------------------------------------------
+  COMMIT WORK. " Confirma todas as alterações na base de dados
+  PERFORM atualizar_saldo_na_tela.
+  MESSAGE: 'Investimento recebido com sucesso.' TYPE 'S'.
+  CLEAR: p_prod, p_qtd, p_cus, p_prec, p_inve, p_sac.
+
+ENDFORM.
+
+FORM atualizar_saldo_na_tela.
+  " Busca o saldo atual
+  SELECT SINGLE saldo INTO v_saldo
+    FROM z34recursos_fin
+    WHERE id_fin = 1.
+ENDFORM.
+
+" Classes para permitir que a janela popup seja fechada
+CLASS lcl_event_handler DEFINITION.
+  PUBLIC SECTION.
+    METHODS: on_close FOR EVENT close OF cl_gui_dialogbox_container
+      IMPORTING sender.
+ENDCLASS.
+
+CLASS lcl_event_handler IMPLEMENTATION.
+  METHOD on_close.
+    " Fecha a popup liberando recursos
+    CALL METHOD sender->free.
+    " Atualiza a GUI
+    CALL METHOD cl_gui_cfw=>flush.
+  ENDMETHOD.
+ENDCLASS.
+
+FORM ver_estoque_popup.
+
+  " Declaração dos objetos globais para manter referência
+  DATA: lo_popup    TYPE REF TO cl_gui_dialogbox_container, " Container do popup
+        lo_alv      TYPE REF TO cl_gui_alv_grid,            " Objeto ALV
+        lt_fieldcat TYPE lvc_t_fcat,                        " Field catalog (estrutura das colunas)
+        ls_fieldcat TYPE lvc_s_fcat,
+        lo_handler  TYPE REF TO lcl_event_handler.
+
+  " Criar popup (janela modal)
+  CREATE OBJECT lo_popup
+    EXPORTING
+      width   = 600 " Largura do popup em pixels
+      height  = 400 " Altura do popup
+      top     = 50  " Posução Y na tela
+      left    = 50  " Posição X na tela
+      caption = 'Visualização do Estoque de Produtos'. " Título da janela
+
+  " Cria handler e registra eventos CLOSE
+  CREATE OBJECT lo_handler.
+  SET HANDLER lo_handler->on_close FOR lo_popup.
+
+  " Criar ALV dentro do popup
+  CREATE OBJECT lo_alv
+    EXPORTING
+      i_parent = lo_popup. " Define que o ALV será exibido dentro do popup
+
+  " Buscar dados do estoque
+  SELECT nome, quantidade, preco, custo
+    FROM z34produtos_est
+    INTO TABLE @gt_produtos. " gt_produtos é a tabela interna com os dados.
+
+  " Montar manualmente o Field Catalog
+  " Como usamos uma estrutura local (ty_produto), o ALV não consegue gerar automaticamente
+  CLEAR lt_fieldcat.
+
+  " Coluna NOME
+  ls_fieldcat-fieldname = 'NOME'.  " Nome do campo da tabela interna
+  ls_fieldcat-coltext = 'Produto'. " Texto da coluna no ALV
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  " Coluna QUANTIDADE
+  ls_fieldcat-fieldname = 'QUANTIDADE'. " Nome do campo da tabela interna
+  ls_fieldcat-coltext = 'Qtd'.          " Texto da coluna no ALV
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  " Coluna PREÇO
+  ls_fieldcat-fieldname = 'PRECO'. " Nome do campo da tabela interna
+  ls_fieldcat-coltext = 'Preço'.   " Texto da coluna no ALV
+  ls_fieldcat-outputlen = 15.      " Largura da coluna
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  " Coluna CUSTO
+  ls_fieldcat-fieldname = 'CUSTO'. " Nome do campo da tabela interna
+  ls_fieldcat-coltext = 'Custo'.   " Texto da coluna no ALV
+  ls_fieldcat-outputlen = 15.      " Largura da coluna
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  " Exibir ALV com os dados e o field catalog
+  CALL METHOD lo_alv->set_table_for_first_display
+    EXPORTING
+      i_structure_name = '' " Deixe vazio porque usamos estrutura local
+    CHANGING
+      it_outtab       = gt_produtos  " Dados a serem exibidos
+      it_fieldcatalog = lt_fieldcat. " Estrutura das colunas
+
+ENDFORM.
+
+FORM sacar_lucro.
+
+  "-----------------------------------------------------
+  " 0. Verificar preenchimento de campos obrigatórios
+  "-----------------------------------------------------
+  IF p_sac IS INITIAL.
+    MESSAGE 'Informe o valor do saque antes de continuar.' TYPE 'E'.
+  ELSEIF p_sac > v_saldo.
+    MESSAGE 'Saldo insuficiente para o saque no valor desejado.' TYPE 'E'.
+  ENDIF.
+  "-----------------------------------------------------
+  " 1. Declaração de variável local
+  "-----------------------------------------------------
+  DATA lv_saldo_atual TYPE z34recursos_fin-saldo.
+
+  "-----------------------------------------------------
+  " 2. Ler o saldo atual do banco
+  "-----------------------------------------------------
+  SELECT SINGLE saldo INTO gv_saldo FROM z34recursos_fin WHERE id_fin = 1.
+
+  "-----------------------------------------------------
+  " 3. Subtrair o saque ao saldo atual
+  "-----------------------------------------------------
+  gv_saldo = gv_saldo - p_sac.
+
+  "-----------------------------------------------------
+  " 4. Atualizar o banco de dados
+  "-----------------------------------------------------
+  UPDATE z34recursos_fin SET saldo = gv_saldo WHERE id_fin = 1.
+
+  "-----------------------------------------------------
+  " 5. Verificar se a gravação no banco deu certo
+  "-----------------------------------------------------
+  IF sy-subrc <> 0.
+    ROLLBACK WORK. " Cancela todas as instruções OpenSQL que modificam dados
+    MESSAGE 'Erro ao sacar o lucro.' TYPE 'E'.
+  ENDIF.
+
+  "-----------------------------------------------------
+  " 6. Feedback ao usuário
+  "-----------------------------------------------------
+  COMMIT WORK. " Confirma todas as alterações na base de dados
+  PERFORM atualizar_saldo_na_tela.
+  MESSAGE: 'Saque realizado com sucesso.' TYPE 'S'.
+  CLEAR: p_prod, p_qtd, p_cus, p_prec, p_inve, p_sac.
+
+ENDFORM.
+
+FORM atualizar_custo.
+
+  "-----------------------------------------------------
+  " 0. Verificar preenchimento de campos obrigatórios
+  "-----------------------------------------------------
+  IF p_prod IS INITIAL.
+    MESSAGE 'Informe o nome do produto antes de continuar.' TYPE 'E'.
+  ENDIF.
+  IF p_cus IS INITIAL.
+    MESSAGE 'Informe o novo custo para atualizar.' TYPE 'E'.
+  ENDIF.
+  IF p_cus <= 0.
+    MESSAGE 'O custo não pode ser negativo nem zerado.' TYPE 'E'.
+  ENDIF.
+  "-----------------------------------------------------
+  " 1. Declaração de variável local
+  "-----------------------------------------------------
+  DATA ls_produto TYPE z34produtos_est.
+
+  "-----------------------------------------------------
+  " 2. Ver se o produto está cadastrado no banco de dados
+  "-----------------------------------------------------
+  SELECT SINGLE *
+    INTO ls_produto
+    FROM z34produtos_est
+    WHERE nome = p_prod.
+
+  IF sy-subrc <> 0.
+    ROLLBACK WORK. " Confirma todas as alterações na base de dados
+    MESSAGE 'Esse produto não foi cadastrado.' TYPE 'E'.
+  ENDIF.
+
+  "-----------------------------------------------------
+  " 3. Atualizar o banco de dados
+  "-----------------------------------------------------
+  UPDATE z34produtos_est
+  SET custo = @ls_produto-custo
+  WHERE id_produto = @ls_produto-id_produto.
+
+  "-----------------------------------------------------
+  " 4. Verificar se a gravação no banco deu certo
+  "-----------------------------------------------------
+  IF sy-subrc <> 0.
+    ROLLBACK WORK. " Cancela todas as instruções OpenSQL que modificam dados
+    MESSAGE 'Erro ao atualizar o custo.' TYPE 'E'.
+  ENDIF.
+
+  "-----------------------------------------------------
+  " 5. Feedback ao usuário
+  "-----------------------------------------------------
+  COMMIT WORK. " Confirma todas as alterações na base de dados
+  MESSAGE: 'Custo atualizado com sucesso!' TYPE 'S'.
+  CLEAR: p_prod, p_qtd, p_cus, p_prec, p_inve, p_sac.
+
+ENDFORM.
+
+FORM atualizar_preco.
+
+  "-----------------------------------------------------
+  " 0. Verificar preenchimento de campos obrigatórios
+  "-----------------------------------------------------
+  IF p_prod IS INITIAL.
+    MESSAGE 'Informe o nome do produto antes de continuar.' TYPE 'E'.
+  ENDIF.
+  IF p_prec IS INITIAL.
+    MESSAGE 'Informe o novo custo para atualizar.' TYPE 'E'.
+  ENDIF.
+  IF p_prec <= 0.
+    MESSAGE 'O preço não pode ser negativo nem zerado.' TYPE 'E'.
+  ENDIF.
+  "-----------------------------------------------------
+  " 1. Declaração de variável local
+  "-----------------------------------------------------
+  DATA ls_produto TYPE z34produtos_est.
+
+  "-----------------------------------------------------
+  " 2. Ver se o produto está cadastrado no banco de dados
+  "-----------------------------------------------------
+  SELECT SINGLE *
+    INTO ls_produto
+    FROM z34produtos_est
+    WHERE nome = p_prod.
+
+  IF sy-subrc <> 0.
+    MESSAGE 'Esse produto não foi cadastrado.' TYPE 'E'.
+  ENDIF.
+
+  "-----------------------------------------------------
+  " 3. Regra de negócio: não permitir venda com prejuízo
+  "-----------------------------------------------------
+  IF p_prec <= ls_produto-custo.
+    MESSAGE 'O preço deve ser maior que o custo do produto.' TYPE 'E'.
+  ENDIF.
+
+  "-----------------------------------------------------
+  " 4. Atualizar o banco de dados
+  "-----------------------------------------------------
+  UPDATE z34produtos_est
+  SET preco = @ls_produto-preco
+  WHERE id_produto = @ls_produto-id_produto.
+
+  "-----------------------------------------------------
+  " 5. Verificar se a gravação no banco deu certo
+  "-----------------------------------------------------
+  IF sy-subrc <> 0.
+    ROLLBACK WORK. " Cancela todas as instruções OpenSQL que modificam dados
+    MESSAGE 'Erro ao atualizar o preço.' TYPE 'E'.
+  ENDIF.
+
+  "-----------------------------------------------------
+  " 6. Feedback ao usuário
+  "-----------------------------------------------------
+  COMMIT WORK. " Confirma todas as alterações na base de dados
+  MESSAGE: 'Preço atualizado com sucesso!' TYPE 'S'.
+  CLEAR: p_prod, p_qtd, p_cus, p_prec, p_inve, p_sac.
+
+ENDFORM.
